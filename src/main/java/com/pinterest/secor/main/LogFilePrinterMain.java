@@ -49,7 +49,9 @@ public class LogFilePrinterMain {
                 .create("f"));
         options.addOption("o", "print_offsets_only", false, "whether to print only offsets " +
                 "ignoring the message payload");
-
+        options.addOption("m", "print_messages_only", false, "whether to print only the message " +
+                "payloads, one per line");
+        options.addOption("r", "recursive", false, "whether to read all the files in a directory");
         CommandLineParser parser = new GnuParser();
         return parser.parse(options, args);
     }
@@ -60,8 +62,10 @@ public class LogFilePrinterMain {
             SecorConfig config = SecorConfig.load();
             FileUtil.configure(config);
             LogFilePrinter printer = new LogFilePrinter(
-                    commandLine.hasOption("print_offsets_only"));
-            printer.printFile(commandLine.getOptionValue("file"));
+                commandLine.hasOption("print_offsets_only"),
+                commandLine.hasOption("print_messages_only"),
+                commandLine.hasOption("recursive"));
+          printer.print(commandLine.getOptionValue("file"));
         } catch (Throwable t) {
             LOG.error("Log file printer failed", t);
             System.exit(1);
