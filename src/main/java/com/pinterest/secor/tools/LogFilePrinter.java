@@ -18,13 +18,17 @@ package com.pinterest.secor.tools;
 
 import com.pinterest.secor.util.FileUtil;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.SequenceFile;
 
-import java.io.IOException;
+import java.io.FileNotFoundException;
+import java.util.Vector;
 
 /**
  * Log file printer displays the content of a log file.
@@ -33,26 +37,71 @@ import java.io.IOException;
  */
 public class LogFilePrinter {
     private boolean mPrintOffsetsOnly;
+    private boolean mPrintMessagesOnly;
+    private boolean mRecursive;
 
-    public LogFilePrinter(boolean printOffsetsOnly) throws IOException {
+    public LogFilePrinter(boolean printOffsetsOnly, boolean printMessagesOnly, boolean recursive) {
         mPrintOffsetsOnly = printOffsetsOnly;
+        mPrintMessagesOnly = printMessagesOnly;
+        mRecursive = recursive;
     }
 
-    public void printFile(String path) throws Exception {
-        FileSystem fileSystem = FileUtil.getFileSystem(path);
+    public void print(String path) throws Exception {
+        final FileSystem fileSystem = FileUtil.getFileSystem(path);
         Path fsPath = new Path(path);
-        SequenceFile.Reader reader = new SequenceFile.Reader(new Configuration(), SequenceFile.Reader.file(fsPath));
-        LongWritable key = (LongWritable) reader.getKeyClass().newInstance();
-        BytesWritable value = (BytesWritable) reader.getValueClass().newInstance();
-        System.out.println("reading file " + path);
-        while (reader.next(key, value)) {
-            if (mPrintOffsetsOnly) {
-                System.out.println(Long.toString(key.get()));
+        FileStatus[] fileList = fileSystem.globStatus(fsPath);
+        if (fileList.length == 0) {
+            throw new FileNotFoundException("unable to find file '" + path + "'");
+        }
+        for (FileStatus fileStatus : fileList) {
+            if (fileStatus.isDirectory()) {
+                if (!mRecursive) {
+                    System.err.println("set -recursive to read directory '" + fsPath + "'");
+                    continue;
+                }
+                // read the remote iterator completely before reading files to prevent it
+                // from going stale.
+                RemoteIterator<LocatedFileStatus> recursiveFilesIterator =
+                    fileSystem.listFiles(fileStatus.getPath(), true);
+                Vector<FileStatus> recursiveFileList = new Vector<FileStatus>();
+                while (recursiveFilesIterator.hasNext()) {
+                    FileStatus recursiveFileStatus = recursiveFilesIterator.next();
+                    if (recursiveFileStatus.isFile()) {
+                        recursiveFileList.add(recursiveFileStatus);
+                    }
+                }
+                for (FileStatus recursiveFileStatus : recursiveFileList) {
+                    printFile(recursiveFileStatus.getPath());
+                }
+            } else if (fileStatus.isFile()) {
+                printFile(fileStatus.getPath());
             } else {
-                byte[] nonPaddedBytes = new byte[value.getLength()];
-                System.arraycopy(value.getBytes(), 0, nonPaddedBytes, 0, value.getLength());
-                System.out.println(Long.toString(key.get()) + ": " + new String(nonPaddedBytes)); 
+                System.err.println
+                    ("Non-file and non-directory found at '" + fileStatus.getPath() + "'?");
             }
+        }
+    }
+
+    private void printFile(Path fsPath) throws Exception {
+        SequenceFile.Reader reader = new SequenceFile.Reader(new Configuration(), SequenceFile.Reader.file(fsPath));
+        try {
+            LongWritable key = (LongWritable) reader.getKeyClass().newInstance();
+            BytesWritable value = (BytesWritable) reader.getValueClass().newInstance();
+            System.err.println("reading file " + fsPath);
+            while (reader.next(key, value)) {
+                if (mPrintOffsetsOnly) {
+                    System.out.println(Long.toString(key.get()));
+                } else {
+                    byte[] nonPaddedBytes = new byte[value.getLength()];
+                    System.arraycopy(value.getBytes(), 0, nonPaddedBytes, 0, value.getLength());
+                    if (!mPrintMessagesOnly) {
+                        System.out.print(Long.toString(key.get()) + ": ");
+                    }
+                    System.out.println(new String(nonPaddedBytes));
+                }
+            }
+        } finally {
+            reader.close();
         }
     }
 }
