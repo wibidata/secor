@@ -178,6 +178,40 @@ verify() {
     done
 }
 
+verify_sequence_file_printer() {
+    run_command "${JAVA} -Dlog4j.configuration=log4j.dev.properties \
+        -Dconfig=secor.test.properties ${ADDITIONAL_OPTS} -cp ${CLASSPATH} \
+        com.pinterest.secor.main.LogFilePrinterMain -r -f ${S3_LOGS_DIR} \
+        > ${PARENT_DIR}/recursive.print.out 2> /dev/null"
+
+    if [ -n "$1" ]; then
+        num_records=`wc -l ${PARENT_DIR}/recursive.print.out | awk '{ print \$1 }'`
+        if [ "$1" -ne "${num_records}" ]; then
+            echo -e "\e[1;41;97mLogFilePrinter verification FAILED\e[0m"
+            echo "LogFilePrinter expected to print $1 records but printed ${num_records}"
+            echo "See ${PARENT_DIR}/recursive.print.out"
+            stop_all
+            stop_s3
+            exit 1
+        fi
+    fi
+    run_command "${JAVA} -Dlog4j.configuration=log4j.dev.properties \
+        -Dconfig=secor.test.properties ${ADDITIONAL_OPTS} -cp ${CLASSPATH} \
+        com.pinterest.secor.main.LogFilePrinterMain -f ${S3_LOGS_DIR}/*/*/*/* \
+        > ${PARENT_DIR}/glob.print.out 2> /dev/null"
+
+    run_command "diff -q ${PARENT_DIR}/recursive.print.out ${PARENT_DIR}/glob.print.out"
+    VERIFICATION_EXIT_CODE=$?
+    if [ ${VERIFICATION_EXIT_CODE} -ne 0 ]; then
+        echo -e "\e[1;41;97mLogFilePrinter verification FAILED\e[0m"
+        echo "LogFilePrinter with recursion does not match with glob"
+        echo "Comparing ${PARENT_DIR}/recursive.print.out and ${PARENT_DIR}/glob.print.out"
+        stop_all
+        stop_s3
+        exit ${VERIFICATION_EXIT_CODE}
+    fi
+}
+
 set_offsets_in_zookeeper() {
     for group in secor_backup secor_partition; do
         for partition in 0 1; do
@@ -229,6 +263,9 @@ post_and_verify_test() {
     echo "Waiting ${WAIT_TIME} sec for Secor to upload logs to s3"
     sleep ${WAIT_TIME}
     verify ${MESSAGES}
+    if [ "${MESSAGE_TYPE}" = "binary" ]; then
+        verify_sequence_file_printer ${MESSAGES}
+    fi
 
     stop_all
     echo -e "\e[1;42;97mpost_and_verify_test succeeded\e[0m"
